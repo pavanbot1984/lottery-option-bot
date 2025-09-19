@@ -8,6 +8,7 @@ defaults:
   rr_mult: 1.0
   trail_drop_pct: 0.25
   rsi_bull_min: 55
+  only_on_bar_close: true   # <— NEW
 
 instruments:
   - name: CALL_119200

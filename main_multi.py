@@ -1,11 +1,14 @@
 # main_multi.py
 import os, time, yaml, random
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 from otm_option_monitor import SingleOptionMonitor
 from trade_logger import TradeLogger, build_trade_id
 from alerts import notify, format_alert
 
 print("[BOOT] lottery-option-bot starting...", flush=True)
+
+IST_TZ = timezone(timedelta(hours=5, minutes=30))
 
 CFG = Path("instruments.yaml")
 logger = TradeLogger()
@@ -20,7 +23,7 @@ def ensure_monitors(cfg):
     global monitors
     session = cfg.get("session","forward_test")
     symbol  = cfg.get("symbol","BTC")
-    expiry  = cfg.get("expiry","2025-09-21")
+    expiry  = str(cfg.get("expiry","2025-09-21"))
     defaults = cfg.get("defaults",{}) or {}
     wanted = {ins["name"]: ins for ins in (cfg.get("instruments") or [])}
 
@@ -41,13 +44,17 @@ def ensure_monitors(cfg):
             half_size_btc=float(params.get("half_size_btc", 0.005)),
             rr_mult=float(params.get("rr_mult", 1.0)),
             trail_drop_pct=float(params.get("trail_drop_pct", 0.25)),
-            rsi_bull_min=float(params.get("rsi_bull_min", 55))
+            rsi_bull_min=float(params.get("rsi_bull_min", 55)),
+            only_on_bar_close=bool(params.get("only_on_bar_close", True)),
         )
         monitors[name] = (mon, {"session":session,"symbol":symbol,"expiry":expiry,"params":params})
         print(f"[CFG] added {name} -> {params['side']} {params['strike']}", flush=True)
 
 def synthetic_snapshot():
-    # Synthetic per-option snapshot so the app runs without external APIs.
+    """
+    Synthetic snapshot used for forward-testing deploys.
+    We still produce values, but decisions will only be taken when bar_closed=True.
+    """
     st5 = random.choice([+1, -1])
     st15 = random.choice([+1, 0, -1])
     rsi = 52 + random.uniform(-12, 12)
@@ -56,13 +63,31 @@ def synthetic_snapshot():
     score = 0.60
     return st5, st15, rsi, macd_h, mark, score
 
+def is_5m_bar_closed(loop_secs: int) -> bool:
+    """
+    Return True for a brief window after each 5-minute boundary in IST.
+    This mimics TradingView 'on bar close' behavior for 5m.
+    """
+    now_ist = datetime.now(timezone.utc).astimezone(IST_TZ)
+    # boundary at minute % 5 == 0, accept within the first 'loop_secs' seconds
+    return (now_ist.minute % 5 == 0) and (now_ist.second < max(5, min(loop_secs, 20)))
+
 def tick_all(cfg):
+    loop_secs = int(cfg.get("reload_secs", 30))
+    bar_closed = is_5m_bar_closed(loop_secs)
     for name, (mon, meta) in monitors.items():
         p = meta["params"]; side = p["side"]; strike = int(p["strike"])
         session, symbol, expiry = meta["session"], meta["symbol"], meta["expiry"]
         st5, st15, rsi, macd_h, mark, score = synthetic_snapshot()
 
-        acts = mon.update(st5_dir=st5, st15_dir=st15, rsi_value=rsi, macd_hist_value=macd_h, mark=mark)
+        acts = mon.update(
+            st5_dir=st5,
+            st15_dir=st15,
+            rsi_value=rsi,
+            macd_hist_value=macd_h,
+            mark=mark,
+            bar_closed=bar_closed,
+        )
         direction = "BULL" if side=="CALL" else "BEAR"
         trade_id = build_trade_id(session=session, symbol=symbol, expiry=expiry, direction=direction, side=side, strike=strike)
         for a in acts:
