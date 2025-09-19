@@ -2,10 +2,12 @@
 requests==2.32.3
 PyYAML==6.0.2
 
-# data/indicators
+# data / indicators (pin to wheel-friendly versions for py3.11)
 numpy==1.26.4
 pandas==2.2.2
 pandas-ta==0.3.14b0
+python-dateutil==2.9.0.post0
+pytz==2024.2
 
 # optional: Google Sheets logging
 gspread==6.0.2
