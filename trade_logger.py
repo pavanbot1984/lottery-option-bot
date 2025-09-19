@@ -55,22 +55,40 @@ class TradeLogger:
                 ])
         _init_sheets()
 
-    def log(self, action, *, session, symbol, expiry, st5_dir, st15_dir, rsi, macd_hist, score):
+        def log(self, action, *, session, symbol, expiry, st5_dir, st15_dir, rsi, macd_hist, score):
         ts = time.time()
         utc = datetime.fromtimestamp(ts, tz=timezone.utc)
         ist = _ist_now_str()
+
+        # Coerce non-JSON types to strings
+        session_str = str(session)
+        symbol_str  = str(symbol)
+        expiry_str  = str(expiry)   # <-- key fix
+        strike_int  = int(action.strike)
+        stage_val   = action.stage if action.stage is not None else ""
+
         row_dict = {
             "ts_epoch": ts,
             "date": utc.strftime("%Y-%m-%d"),
             "time_utc": utc.strftime("%H:%M:%S UTC"),
             "time_ist": ist,
-            "trade_id": action.trade_id,
-            "session": session, "symbol": symbol, "expiry": expiry,
-            "kind": action.kind, "direction": action.direction, "side": action.side,
-            "strike": int(action.strike),
-            "stage": action.stage if action.stage is not None else "",
-            "size_btc": action.size_btc, "mark": action.mark, "note": action.note,
-            "st5_dir": st5_dir, "st15_dir": st15_dir, "rsi": rsi, "macd_hist": macd_hist, "score": score
+            "trade_id": str(action.trade_id),
+            "session": session_str,
+            "symbol": symbol_str,
+            "expiry": expiry_str,
+            "kind": str(action.kind),
+            "direction": str(action.direction),
+            "side": str(action.side),
+            "strike": strike_int,
+            "stage": stage_val,
+            "size_btc": float(action.size_btc) if action.size_btc is not None else 0.0,
+            "mark": float(action.mark) if action.mark is not None else 0.0,
+            "note": str(action.note),
+            "st5_dir": int(st5_dir),
+            "st15_dir": int(st15_dir),
+            "rsi": float(rsi),
+            "macd_hist": float(macd_hist),
+            "score": float(score),
         }
 
         # JSONL as object
@@ -99,6 +117,7 @@ class TradeLogger:
                 ], value_input_option="RAW")
             except Exception as e:
                 print("[LOGGER] Sheets append failed:", e)
+
 
 def build_trade_id(*, session:str, symbol:str, expiry:str, direction:str, side:str, strike:int|float) -> str:
     return f"{session}::{symbol}-{expiry}-{direction}-{side}-K{int(strike)}"
