@@ -1,0 +1,6 @@
+requests
+pandas
+ta
+gspread
+google-auth
+pyyaml

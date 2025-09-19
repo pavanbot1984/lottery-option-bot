@@ -1,0 +1,19 @@
+session: forward_test
+symbol: BTC
+expiry: 2025-09-21
+reload_secs: 30
+
+defaults:
+  half_size_btc: 0.005
+  rr_mult: 1.0
+  trail_drop_pct: 0.25
+  rsi_bull_min: 55
+
+instruments:
+  - name: CALL_119200
+    side: CALL
+    strike: 119200
+
+  - name: PUT_114800
+    side: PUT
+    strike: 114800
