@@ -55,7 +55,7 @@ class TradeLogger:
                 ])
         _init_sheets()
 
-        def log(self, action, *, session, symbol, expiry, st5_dir, st15_dir, rsi, macd_hist, score):
+           def log(self, action, *, session, symbol, expiry, st5_dir, st15_dir, rsi, macd_hist, score):
         ts = time.time()
         utc = datetime.fromtimestamp(ts, tz=timezone.utc)
         ist = _ist_now_str()
@@ -90,6 +90,9 @@ class TradeLogger:
             "macd_hist": float(macd_hist),
             "score": float(score),
         }
+
+        # … rest of the function
+
 
         # JSONL as object
         with open(self.jsonl_path, "a", encoding="utf-8") as jf:
