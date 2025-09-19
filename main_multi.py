@@ -1,5 +1,6 @@
 # main_multi.py
 import time, yaml
+import pandas as pd
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -21,6 +22,11 @@ cfg_cache_mtime = None
 def load_cfg():
     with open(CFG, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+def is_just_after_5m_close(window_s: int) -> bool:
+    now_ist = datetime.now(timezone.utc).astimezone(IST_TZ)
+    # e.g., with reload_secs=30, we allow a 30s post-close window
+    return (now_ist.minute % 5 == 0) and (now_ist.second < max(10, min(window_s, 30)))
 
 def ensure_monitors(cfg):
     """Create/remove monitors to match the YAML."""
@@ -83,6 +89,10 @@ def tick_all(cfg):
     loop_secs = int(cfg.get("reload_secs", 30))
     # Only run decisions right after each 5m close
     bar_closed = is_just_after_5m_close(loop_secs)
+
+	now_ist = datetime.now(timezone.utc).astimezone(IST_TZ).strftime("%H:%M:%S")
+	print(f"[HEARTBEAT] {now_ist} IST | bar_closed={bar_closed}", flush=True)
+
 
     for name, (mon, meta) in monitors.items():
         p = meta["params"]; side = p["side"]; strike = int(p["strike"])
