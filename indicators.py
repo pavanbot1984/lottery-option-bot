@@ -1,49 +1,20 @@
 # indicators.py
 import pandas as pd
+import pandas_ta as ta
 
-def rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    delta = series.diff()
-    up = (delta.clip(lower=0)).ewm(alpha=1/period, adjust=False).mean()
-    down = (-delta.clip(upper=0)).ewm(alpha=1/period, adjust=False).mean()
-    rs = up / (down.replace(0, 1e-9))
-    return 100 - (100 / (1 + rs))
+def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds Supertrend(10,3), MACD(12,26,9) and RSI(14).
+    Expects columns: high, low, close
+    Produces columns: st, st_dir, macd_hist, rsi
+    """
+    st = ta.supertrend(high=df["high"], low=df["low"], close=df["close"], length=10, multiplier=3.0)
+    # pandas_ta returns columns like SUPERT_10_3.0, SUPERTd_10_3.0, SUPERTl_10_3.0, etc.
+    df["st"] = st[f"SUPERT_10_3.0"]
+    df["st_dir"] = st[f"SUPERTd_10_3.0"]  # +1 or -1
 
-def macd_hist(series: pd.Series, fast:int=12, slow:int=26, signal:int=9) -> pd.Series:
-    ema_fast = series.ewm(span=fast, adjust=False).mean()
-    ema_slow = series.ewm(span=slow, adjust=False).mean()
-    macd = ema_fast - ema_slow
-    sig = macd.ewm(span=signal, adjust=False).mean()
-    return macd - sig
+    macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
+    df["macd_hist"] = macd["MACDh_12_26_9"]
 
-def supertrend(df: pd.DataFrame, atr_period:int=10, atr_mult:float=3.0) -> pd.DataFrame:
-    # df must have: open, high, low, close
-    hl2 = (df['high'] + df['low']) / 2
-    tr = (df['high'] - df['low']).to_frame('h-l')
-    tr['h-c'] = (df['high'] - df['close'].shift()).abs()
-    tr['l-c'] = (df['low'] - df['close'].shift()).abs()
-    tr = tr.max(axis=1)
-    atr = tr.ewm(alpha=1/atr_period, adjust=False).mean()
-    upper = hl2 + atr_mult * atr
-    lower = hl2 - atr_mult * atr
-
-    st = pd.Series(index=df.index, dtype=float)
-    dir = pd.Series(index=df.index, dtype=int)
-
-    st.iloc[0] = upper.iloc[0]
-    dir.iloc[0] = 1
-    for i in range(1, len(df)):
-        prev_st = st.iloc[i-1]
-        prev_dir = dir.iloc[i-1]
-        curr_upper = upper.iloc[i]
-        curr_lower = lower.iloc[i]
-        if prev_dir == 1:
-            st.iloc[i] = curr_lower if df['close'].iloc[i] < prev_st else min(curr_upper, prev_st)
-            dir.iloc[i] = -1 if df['close'].iloc[i] < prev_st else 1
-        else:
-            st.iloc[i] = curr_upper if df['close'].iloc[i] > prev_st else max(curr_lower, prev_st)
-            dir.iloc[i] = 1 if df['close'].iloc[i] > prev_st else -1
-
-    out = df.copy()
-    out['st'] = st
-    out['st_dir'] = dir
-    return out
+    df["rsi"] = ta.rsi(df["close"], length=14)
+    return df

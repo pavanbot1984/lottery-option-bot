@@ -4,3 +4,4 @@ ta
 gspread
 google-auth
 pyyaml
+pandas_ta

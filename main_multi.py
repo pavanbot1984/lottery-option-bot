@@ -1,7 +1,10 @@
 # main_multi.py
-import os, time, yaml, random
+import time, yaml
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+
+from get_candles_delta import get_candles
+from indicators import add_indicators
 from otm_option_monitor import SingleOptionMonitor
 from trade_logger import TradeLogger, build_trade_id
 from alerts import notify, format_alert
@@ -9,10 +12,10 @@ from alerts import notify, format_alert
 print("[BOOT] lottery-option-bot starting...", flush=True)
 
 IST_TZ = timezone(timedelta(hours=5, minutes=30))
-
 CFG = Path("instruments.yaml")
+
 logger = TradeLogger()
-monitors = {}  # name -> (monitor, meta)
+monitors = {}   # name -> (monitor, meta)
 cfg_cache_mtime = None
 
 def load_cfg():
@@ -20,22 +23,23 @@ def load_cfg():
         return yaml.safe_load(f) or {}
 
 def ensure_monitors(cfg):
+    """Create/remove monitors to match the YAML."""
     global monitors
-    session = cfg.get("session","forward_test")
-    symbol  = cfg.get("symbol","BTC")
-    expiry  = str(cfg.get("expiry","2025-09-21"))
-    defaults = cfg.get("defaults",{}) or {}
+    session = cfg.get("session", "forward_test")
+    symbol  = cfg.get("symbol", "BTCUSD")   # <- using Delta spot perpetual symbol for 5m candles
+    expiry  = str(cfg.get("expiry", "2025-09-21"))
+    defaults = cfg.get("defaults", {}) or {}
     wanted = {ins["name"]: ins for ins in (cfg.get("instruments") or [])}
 
-    # remove missing
+    # Remove missing
     for name in list(monitors.keys()):
         if name not in wanted:
             print("[CFG] remove monitor:", name, flush=True)
             monitors.pop(name)
 
-    # add new
+    # Add new
     for name, ins in wanted.items():
-        if name in monitors: 
+        if name in monitors:
             continue
         params = defaults.copy(); params.update(ins)
         mon = SingleOptionMonitor(
@@ -47,38 +51,44 @@ def ensure_monitors(cfg):
             rsi_bull_min=float(params.get("rsi_bull_min", 55)),
             only_on_bar_close=bool(params.get("only_on_bar_close", True)),
         )
-        monitors[name] = (mon, {"session":session,"symbol":symbol,"expiry":expiry,"params":params})
+        monitors[name] = (mon, {"session": session, "symbol": symbol, "expiry": expiry, "params": params})
         print(f"[CFG] added {name} -> {params['side']} {params['strike']}", flush=True)
 
-def synthetic_snapshot():
+def fetch_snapshot(symbol: str):
     """
-    Synthetic snapshot used for forward-testing deploys.
-    We still produce values, but decisions will only be taken when bar_closed=True.
+    Pull last 100 *closed* 5m candles from Delta for `symbol`,
+    compute indicators, and return the latest closed bar snapshot.
     """
-    st5 = random.choice([+1, -1])
-    st15 = random.choice([+1, 0, -1])
-    rsi = 52 + random.uniform(-12, 12)
-    macd_h = random.uniform(-0.03, 0.03)
-    mark = 120 + random.uniform(-30, 60)
-    score = 0.60
-    return st5, st15, rsi, macd_h, mark, score
+    df = get_candles(symbol=symbol, resolution="5m", limit=100)
+    df = add_indicators(df)
+    last = df.iloc[-1]  # last closed bar
+    st5_dir = 1 if float(last["st_dir"]) > 0 else -1
+    # For now 15m confirm is disabled; keep neutral (0) to avoid ADD logic dependence.
+    st15_dir = 0
+    rsi = float(last["rsi"]) if pd.notna(last["rsi"]) else 50.0
+    macd_h = float(last["macd_hist"]) if pd.notna(last["macd_hist"]) else 0.0
+    mark = float(last["close"])
+    score = 0.0
+    return st5_dir, st15_dir, rsi, macd_h, mark, score
 
-def is_5m_bar_closed(loop_secs: int) -> bool:
+def is_just_after_5m_close(window_s: int) -> bool:
     """
-    Return True for a brief window after each 5-minute boundary in IST.
-    This mimics TradingView 'on bar close' behavior for 5m.
+    True only in the first window_s seconds after a 5m boundary in IST.
+    Ensures we act on bar close only.
     """
     now_ist = datetime.now(timezone.utc).astimezone(IST_TZ)
-    # boundary at minute % 5 == 0, accept within the first 'loop_secs' seconds
-    return (now_ist.minute % 5 == 0) and (now_ist.second < max(5, min(loop_secs, 20)))
+    return (now_ist.minute % 5 == 0) and (now_ist.second < max(5, min(window_s, 20)))
 
 def tick_all(cfg):
     loop_secs = int(cfg.get("reload_secs", 30))
-    bar_closed = is_5m_bar_closed(loop_secs)
+    # Only run decisions right after each 5m close
+    bar_closed = is_just_after_5m_close(loop_secs)
+
     for name, (mon, meta) in monitors.items():
         p = meta["params"]; side = p["side"]; strike = int(p["strike"])
         session, symbol, expiry = meta["session"], meta["symbol"], meta["expiry"]
-        st5, st15, rsi, macd_h, mark, score = synthetic_snapshot()
+
+        st5, st15, rsi, macd_h, mark, score = fetch_snapshot(symbol=symbol)
 
         acts = mon.update(
             st5_dir=st5,
@@ -88,7 +98,7 @@ def tick_all(cfg):
             mark=mark,
             bar_closed=bar_closed,
         )
-        direction = "BULL" if side=="CALL" else "BEAR"
+        direction = "BULL" if side == "CALL" else "BEAR"
         trade_id = build_trade_id(session=session, symbol=symbol, expiry=expiry, direction=direction, side=side, strike=strike)
         for a in acts:
             a.trade_id = trade_id
