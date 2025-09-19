@@ -1,5 +1,5 @@
 session: forward_test
-symbol: BTC
+symbol: BTCUSD        # <-- IMPORTANT (was 'BTC' earlier)
 expiry: "2025-09-21"
 reload_secs: 30
 
@@ -8,13 +8,12 @@ defaults:
   rr_mult: 1.0
   trail_drop_pct: 0.25
   rsi_bull_min: 55
-  only_on_bar_close: true   # <— NEW
+  only_on_bar_close: true
 
 instruments:
   - name: CALL_119200
     side: CALL
     strike: 119200
-
   - name: PUT_114800
     side: PUT
     strike: 114800
