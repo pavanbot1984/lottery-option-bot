@@ -1,7 +1,12 @@
-requests
-pandas
-ta
-gspread
-google-auth
-pyyaml
-pandas-ta
+# core
+requests==2.32.3
+PyYAML==6.0.2
+
+# data/indicators
+numpy==1.26.4
+pandas==2.2.2
+pandas-ta==0.3.14b0
+
+# optional: Google Sheets logging
+gspread==6.0.2
+google-auth==2.34.0
