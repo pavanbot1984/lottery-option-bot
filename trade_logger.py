@@ -1,22 +1,25 @@
 # trade_logger.py
-import os, json, csv, time, base64
+import os
+import json
+import csv
+import time
+import base64
+import requests
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# --- Optional Telegram (for startup ping) ---
-import requests
+# --- Timezone helpers ---
+IST_TZ = timezone(timedelta(hours=5, minutes=30))
 
+def _now_ist_str() -> str:
+    """Current time in IST using aware UTC→IST conversion."""
+    return datetime.now(timezone.utc).astimezone(IST_TZ).strftime("%Y-%m-%d %H:%M:%S IST")
+
+# --- Optional Telegram (startup ping only) ---
 _TG_TOKEN = os.getenv("TG_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 _TG_CHAT  = os.getenv("TG_CHAT_ID")   or os.getenv("TELEGRAM_CHAT_ID")
 
-def _ist_tz():
-    return timezone(timedelta(hours=5, minutes=30))
-
-def _now_ist_str():
-    return datetime.now(_ist_tz()).strftime("%Y-%m-%d %H:%M:%S IST")
-
-def _tg_send(text: str):
-    """Best-effort Telegram send; no throw."""
+def _tg_send(text: str) -> None:
     if not (_TG_TOKEN and _TG_CHAT):
         return
     try:
@@ -35,17 +38,19 @@ def _tg_send(text: str):
 # --- Optional Google Sheets support ---
 _gs_sheet = None
 
-def _init_sheets():
+def _init_sheets() -> None:
     """Optional Google Sheets hookup. If env vars not set, it silently skips."""
     global _gs_sheet
     try:
         import gspread
         from google.oauth2.service_account import Credentials
+
         b64 = os.getenv("GOOGLE_SHEETS_CRED_B64")
         sid = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID")
         sname = os.getenv("GOOGLE_SHEETS_SHEET_NAME", "logs")
         if not (b64 and sid):
             return
+
         creds_json = json.loads(base64.b64decode(b64).decode("utf-8"))
         creds = Credentials.from_service_account_info(
             creds_json,
@@ -53,6 +58,7 @@ def _init_sheets():
         )
         client = gspread.authorize(creds)
         sh = client.open_by_key(sid)
+
         # ensure worksheet
         for ws in sh.worksheets():
             if ws.title == sname:
@@ -60,7 +66,8 @@ def _init_sheets():
                 break
         if _gs_sheet is None:
             _gs_sheet = sh.add_worksheet(title=sname, rows=1000, cols=25)
-        # header
+
+        # header row
         hdr = [
             "ts_epoch","date","time_utc","time_ist","trade_id",
             "session","symbol","expiry","kind","direction","side",
@@ -73,11 +80,12 @@ def _init_sheets():
                 _gs_sheet.insert_row(hdr, 1)
             else:
                 _gs_sheet.append_row(hdr, value_input_option="RAW")
+
     except Exception as e:
         print("[LOGGER] Sheets init skipped:", e)
 
 class TradeLogger:
-    def __init__(self, csv_path="logs/trades.csv", jsonl_path="logs/trades.jsonl"):
+    def __init__(self, csv_path: str = "logs/trades.csv", jsonl_path: str = "logs/trades.jsonl"):
         Path("logs").mkdir(parents=True, exist_ok=True)
         self.csv_path = csv_path
         self.jsonl_path = jsonl_path
@@ -95,7 +103,7 @@ class TradeLogger:
         # Optional integrations
         _init_sheets()
 
-        # Startup ping (optional; only if TG envs exist)
+        # Optional startup ping
         if _TG_TOKEN and _TG_CHAT:
             _tg_send(f"🤖 lottery-option-bot started at {_now_ist_str()}")
 
@@ -111,14 +119,13 @@ class TradeLogger:
         rsi,
         macd_hist,
         score,
-    ):
+    ) -> None:
         """Persist a trade event to JSONL, CSV, and optionally Google Sheets."""
         ts = time.time()
-        # UTC + IST strings (IST is your display truth)
-        utc_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        utc_dt = datetime.fromtimestamp(ts, tz=timezone.utc)  # aware UTC
         time_ist = _now_ist_str()
 
-        # normalize types (avoid YAML date objects, Decimals, etc.)
+        # Normalize everything to JSON/CSV-safe primitives
         row_dict = {
             "ts_epoch": float(ts),
             "date": utc_dt.strftime("%Y-%m-%d"),
@@ -127,7 +134,7 @@ class TradeLogger:
             "trade_id": str(getattr(action, "trade_id", "")),
             "session": str(session),
             "symbol": str(symbol),
-            "expiry": str(expiry),  # <- critical: force string
+            "expiry": str(expiry),  # force string (YAML may parse to date)
             "kind": str(getattr(action, "kind", "")),
             "direction": str(getattr(action, "direction", "")),
             "side": str(getattr(action, "side", "")),
@@ -164,5 +171,13 @@ class TradeLogger:
             except Exception as e:
                 print("[LOGGER] Sheets append failed:", e)
 
-def build_trade_id(*, session: str, symbol: str, expiry: str, direction: str, side: str, strike: int | float) -> str:
+def build_trade_id(
+    *,
+    session: str,
+    symbol: str,
+    expiry: str,
+    direction: str,
+    side: str,
+    strike: int | float,
+) -> str:
     return f"{session}::{symbol}-{expiry}-{direction}-{side}-K{int(strike)}"
