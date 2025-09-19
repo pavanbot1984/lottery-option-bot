@@ -1,6 +1,5 @@
 # main_multi.py
-import time, yaml
-import pandas as pd
+import time, yaml, pandas as pd
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -23,31 +22,26 @@ def load_cfg():
     with open(CFG, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
-def is_just_after_5m_close(window_s: int) -> bool:
-    now_ist = datetime.now(timezone.utc).astimezone(IST_TZ)
-    # e.g., with reload_secs=30, we allow a 30s post-close window
-    return (now_ist.minute % 5 == 0) and (now_ist.second < max(10, min(window_s, 30)))
-
 def ensure_monitors(cfg):
-    """Create/remove monitors to match the YAML."""
     global monitors
     session = cfg.get("session", "forward_test")
-    symbol  = cfg.get("symbol", "BTCUSD")   # <- using Delta spot perpetual symbol for 5m candles
+    symbol  = cfg.get("symbol", "BTCOPTIONS")
     expiry  = str(cfg.get("expiry", "2025-09-21"))
     defaults = cfg.get("defaults", {}) or {}
     wanted = {ins["name"]: ins for ins in (cfg.get("instruments") or [])}
 
-    # Remove missing
     for name in list(monitors.keys()):
         if name not in wanted:
             print("[CFG] remove monitor:", name, flush=True)
             monitors.pop(name)
 
-    # Add new
     for name, ins in wanted.items():
         if name in monitors:
             continue
         params = defaults.copy(); params.update(ins)
+        if not params.get("delta_symbol"):
+            print(f"[CFG] {name} missing delta_symbol → skipping", flush=True)
+            continue
         mon = SingleOptionMonitor(
             side=params["side"],
             strike=params["strike"],
@@ -57,65 +51,60 @@ def ensure_monitors(cfg):
             rsi_bull_min=float(params.get("rsi_bull_min", 55)),
             only_on_bar_close=bool(params.get("only_on_bar_close", True)),
         )
-        monitors[name] = (mon, {"session": session, "symbol": symbol, "expiry": expiry, "params": params})
+        monitors[name] = (mon, {"session":session,"symbol":symbol,"expiry":expiry,"params":params})
         print(f"[CFG] added {name} -> {params['side']} {params['strike']}", flush=True)
 
-def fetch_snapshot(symbol: str):
+def fetch_leg_snapshot(delta_symbol: str):
     """
-    Pull last 100 *closed* 5m candles from Delta for `symbol`,
-    compute indicators, and return the latest closed bar snapshot.
+    Pull last 100 closed 5m candles for THIS OPTION symbol,
+    compute indicators, and return the latest closed bar.
     """
-    df = get_candles(symbol=symbol, resolution="5m", limit=100)
+    df = get_candles(symbol=delta_symbol, resolution="5m", limit=100)
     df = add_indicators(df)
-    last = df.iloc[-1]  # last closed bar
+    last = df.iloc[-1]
     st5_dir = 1 if float(last["st_dir"]) > 0 else -1
-    # For now 15m confirm is disabled; keep neutral (0) to avoid ADD logic dependence.
-    st15_dir = 0
     rsi = float(last["rsi"]) if pd.notna(last["rsi"]) else 50.0
     macd_h = float(last["macd_hist"]) if pd.notna(last["macd_hist"]) else 0.0
-    mark = float(last["close"])
-    score = 0.0
-    return st5_dir, st15_dir, rsi, macd_h, mark, score
+    mark = float(last["close"])  # option’s own close
+    return st5_dir, rsi, macd_h, mark
 
 def is_just_after_5m_close(window_s: int) -> bool:
-    """
-    True only in the first window_s seconds after a 5m boundary in IST.
-    Ensures we act on bar close only.
-    """
     now_ist = datetime.now(timezone.utc).astimezone(IST_TZ)
-    return (now_ist.minute % 5 == 0) and (now_ist.second < max(5, min(window_s, 20)))
+    return (now_ist.minute % 5 == 0) and (now_ist.second < max(10, min(window_s, 30)))
 
 def tick_all(cfg):
-    loop_secs = int(cfg.get("reload_secs", 30))
-    # Only run decisions right after each 5m close
+    loop_secs = int(cfg.get("reload_secs", 60))
     bar_closed = is_just_after_5m_close(loop_secs)
-
-	now_ist = datetime.now(timezone.utc).astimezone(IST_TZ).strftime("%H:%M:%S")
-	print(f"[HEARTBEAT] {now_ist} IST | bar_closed={bar_closed}", flush=True)
-
 
     for name, (mon, meta) in monitors.items():
         p = meta["params"]; side = p["side"]; strike = int(p["strike"])
         session, symbol, expiry = meta["session"], meta["symbol"], meta["expiry"]
+        delta_symbol = p["delta_symbol"]
 
-        st5, st15, rsi, macd_h, mark, score = fetch_snapshot(symbol=symbol)
+        try:
+            st5, rsi, macd_h, mark = fetch_leg_snapshot(delta_symbol)
+        except Exception as e:
+            print(f"[WARN] snapshot failed for {name} ({delta_symbol}):", e, flush=True)
+            continue
 
         acts = mon.update(
             st5_dir=st5,
-            st15_dir=st15,
+            st15_dir=0,             # 15m confirm disabled for now
             rsi_value=rsi,
             macd_hist_value=macd_h,
             mark=mark,
             bar_closed=bar_closed,
         )
+
         direction = "BULL" if side == "CALL" else "BEAR"
-        trade_id = build_trade_id(session=session, symbol=symbol, expiry=expiry, direction=direction, side=side, strike=strike)
+        trade_id = build_trade_id(session=session, symbol=symbol, expiry=expiry,
+                                  direction=direction, side=side, strike=strike)
         for a in acts:
             a.trade_id = trade_id
             a.direction = direction
             notify(format_alert(a))
             logger.log(a, session=session, symbol=symbol, expiry=expiry,
-                       st5_dir=st5, st15_dir=st15, rsi=rsi, macd_hist=macd_h, score=score)
+                       st5_dir=st5, st15_dir=0, rsi=rsi, macd_hist=macd_h, score=0.0)
 
 if __name__ == "__main__":
     if not CFG.exists():
@@ -128,7 +117,7 @@ if __name__ == "__main__":
                 ensure_monitors(cfg)
                 cfg_cache_mtime = mtime
             tick_all(cfg)
-            time.sleep(cfg.get("reload_secs", 30))
+            time.sleep(cfg.get("reload_secs", 60))
         except Exception as e:
             print("[ERROR]", e, flush=True)
             time.sleep(5)

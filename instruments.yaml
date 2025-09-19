@@ -1,7 +1,7 @@
 session: forward_test
-symbol: BTCUSD        # <-- IMPORTANT (was 'BTC' earlier)
+symbol: BTCOPTIONS            # just a label in trade_id; not used for feed now
 expiry: "2025-09-21"
-reload_secs: 30
+reload_secs: 60               # 60s to reduce API load (5m bar-close logic in code)
 
 defaults:
   half_size_btc: 0.005
@@ -14,6 +14,8 @@ instruments:
   - name: CALL_119200
     side: CALL
     strike: 119200
+    delta_symbol: C-BTC-119200-210925   # <-- option symbol on Delta
   - name: PUT_114800
     side: PUT
     strike: 114800
+    delta_symbol: P-BTC-114800-210925
