@@ -1,6 +1,6 @@
 session: forward_test
 symbol: BTC
-expiry: 2025-09-21
+expiry: "2025-09-21"
 reload_secs: 30
 
 defaults:
